@@ -1,0 +1,16 @@
+name: Mirror Sync
+on:
+  schedule:
+  - cron:  "0 */4 * * *"
+jobs:
+  mirror-sync:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@master
+    - name: mirror-sync
+      uses: repo-sync/github-sync@v2
+      with:
+        source_repo: "https://git.yoctoproject.org/git/meta-virtualization.git"
+        source_branch: "*"
+        destination_branch: "*"
+        github_token: ${{ secrets.GITHUB_TOKEN }}
