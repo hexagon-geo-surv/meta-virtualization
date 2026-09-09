@@ -20,34 +20,76 @@
 #   tests/build-vcontainer-sdk.sh
 #
 # Env overrides (all optional):
-#   POKY_DIR         poky root                (default: derived from this script)
 #   DEV_BUILD        existing build dir to copy layers + cache config from
-#                                             (default: $BUILD_DIR or $POKY_DIR/build)
-#   SDK_BUILD_DIR    isolated build dir        (default: $POKY_DIR/build-vcontainer-sdk)
+#                                             (default: $BUILDDIR, else <poky>/build)
+#   OE_INIT          path to oe-init-build-env (default: discovered from DEV_BUILD's
+#                    bblayers.conf, then bitbake on PATH, then this script's ../..)
+#   OECORE_DIR       dir containing oe-init-build-env (alt to OE_INIT)
+#   SDK_BUILD_DIR    isolated build dir        (default: sibling of DEV_BUILD)
 #   SDK_EXTRACT_DIR  where to extract the SDK  (default: /tmp/vcontainer)
+#
+# meta-virt need NOT live under the OE-core checkout -- OE-core is found from the
+# dev build's layer list, not from where this script sits.
 #
 # On success it prints the --vdkr-dir path to hand to pytest.
 
 set -eu
 
 here="$(cd "$(dirname "$0")" && pwd)"                       # .../meta-virtualization/tests
-POKY_DIR="${POKY_DIR:-$(cd "$here/../.." && pwd)}"          # poky root
-DEV_BUILD="${DEV_BUILD:-${BUILD_DIR:-$POKY_DIR/build}}"
-SDK_BUILD_DIR="${SDK_BUILD_DIR:-$POKY_DIR/build-vcontainer-sdk}"
+# --- existing build to reuse (source of layers + cache config); required ---
+DEV_BUILD="${DEV_BUILD:-${BUILDDIR:-}}"
+if [ -z "$DEV_BUILD" ] && [ -f "$here/../../build/conf/bblayers.conf" ]; then
+    DEV_BUILD="$here/../../build"                       # convenience default (meta-virt under poky)
+fi
+{ [ -n "$DEV_BUILD" ] && [ -f "$DEV_BUILD/conf/bblayers.conf" ] && [ -f "$DEV_BUILD/conf/local.conf" ]; } || {
+    echo "ERROR: set DEV_BUILD to an existing build dir (with conf/{bblayers,local}.conf)," >&2
+    echo "       or source your build env first so BUILDDIR is set." >&2
+    exit 1
+}
+DEV_BUILD="$(cd "$DEV_BUILD" && pwd)"
+
+# --- locate oe-init-build-env (OE-core/poky root) ---
+# meta-virt is NOT assumed to live under the OE-core checkout. Resolve in order:
+#   1. $OE_INIT (path to the script) or $OECORE_DIR (dir containing it)
+#   2. the oe-core layer listed in the dev build's bblayers.conf (layout-independent:
+#      the core layer sits next to oe-init-build-env)
+#   3. bitbake on PATH (a build env is already sourced)
+#   4. this script's ../.. (only when meta-virt does live under poky)
+resolve_oe_init() {
+    if [ -n "${OE_INIT:-}" ] && [ -f "$OE_INIT" ]; then echo "$OE_INIT"; return 0; fi
+    if [ -n "${OECORE_DIR:-}" ] && [ -f "$OECORE_DIR/oe-init-build-env" ]; then
+        echo "$OECORE_DIR/oe-init-build-env"; return 0
+    fi
+    local tok bb
+    for tok in $(grep -oE '/[^" ]+' "$DEV_BUILD/conf/bblayers.conf" 2>/dev/null); do
+        [ -f "$tok/../oe-init-build-env" ] && { echo "$(cd "$tok/.." && pwd)/oe-init-build-env"; return 0; }
+    done
+    bb="$(command -v bitbake || true)"
+    [ -n "$bb" ] && [ -f "$(dirname "$bb")/../../oe-init-build-env" ] && {
+        echo "$(cd "$(dirname "$bb")/../.." && pwd)/oe-init-build-env"; return 0; }
+    [ -f "$here/../../oe-init-build-env" ] && { echo "$(cd "$here/../.." && pwd)/oe-init-build-env"; return 0; }
+    return 1
+}
+OE_INIT="$(resolve_oe_init)" || {
+    echo "ERROR: could not find oe-init-build-env; set OE_INIT=/path/to/oe-init-build-env (or OECORE_DIR)." >&2
+    exit 1
+}
+
+SDK_BUILD_DIR="${SDK_BUILD_DIR:-$(dirname "$DEV_BUILD")/build-vcontainer-sdk}"
 SDK_EXTRACT_DIR="${SDK_EXTRACT_DIR:-/tmp/vcontainer}"
 
-[ -f "$POKY_DIR/oe-init-build-env" ] || { echo "ERROR: no oe-init-build-env under POKY_DIR=$POKY_DIR" >&2; exit 1; }
-[ -f "$DEV_BUILD/conf/bblayers.conf" ] || { echo "ERROR: no bblayers.conf in DEV_BUILD=$DEV_BUILD (set DEV_BUILD)" >&2; exit 1; }
-[ -f "$DEV_BUILD/conf/local.conf" ]    || { echo "ERROR: no local.conf in DEV_BUILD=$DEV_BUILD (set DEV_BUILD)" >&2; exit 1; }
-
-echo "poky:        $POKY_DIR"
+echo "oe-init:     $OE_INIT"
 echo "dev build:   $DEV_BUILD (layers + cache config source)"
 echo "sdk build:   $SDK_BUILD_DIR (isolated)"
 echo "extract to:  $SDK_EXTRACT_DIR"
 
-# oe-init-build-env creates/enters the isolated build dir (does not touch DEV_BUILD)
+# oe-init-build-env enters the isolated build dir (does not touch DEV_BUILD).
+# It references unset vars (e.g. BBSERVER) and is not `set -u` safe, so relax
+# nounset just around the source.
+set +u
 # shellcheck disable=SC1090
-source "$POKY_DIR/oe-init-build-env" "$SDK_BUILD_DIR" >/dev/null
+source "$OE_INIT" "$SDK_BUILD_DIR" >/dev/null
+set -u
 
 # Reuse the current layer stack verbatim -- "build against the current config".
 cp "$DEV_BUILD/conf/bblayers.conf" conf/bblayers.conf
