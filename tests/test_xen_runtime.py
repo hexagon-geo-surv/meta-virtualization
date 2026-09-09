@@ -74,33 +74,34 @@ class XenRunner:
     xen-image-minimal via runqemu.
     """
 
-    def __init__(self, poky_dir, build_dir, machine, use_kvm=True, timeout=120):
-        self.poky_dir = Path(poky_dir)
-        self.build_dir = Path(build_dir)
-        self.machine = machine
+    def __init__(self, vdkr_dir, arch="x86_64", use_kvm=True, timeout=120):
+        self.vdkr_dir = Path(vdkr_dir)
+        self.arch = arch
         self.use_kvm = use_kvm
         self.timeout = timeout
         self.child = None
         self.booted = False
 
     def start(self):
-        """Start runqemu and wait for login prompt."""
+        """Boot the SDK's vxn dom0 via boot-xen.sh and wait for the login prompt."""
         if not PEXPECT_AVAILABLE:
             raise RuntimeError("pexpect not installed. Run: pip install pexpect")
 
-        kvm_opt = "kvm" if self.use_kvm else ""
+        # boot-xen.sh (shipped in the SDK) auto-finds vxn-blobs/<arch>/*.wic,
+        # picks the SDK's bundled qemu, and runs -nographic -serial mon:stdio.
+        # It uses KVM automatically when /dev/kvm is writable. VXN_MEM gives the
+        # dom0 headroom for the nested vxn/vctr guests. Booting the shipped dom0
+        # (not a fresh bitbake) keeps these tests independent of local.conf.
         cmd = (
-            f"bash -c 'cd {self.poky_dir} && "
-            f"source oe-init-build-env {self.build_dir} >/dev/null 2>&1 && "
-            f"runqemu {self.machine} xen-image-minimal wic nographic slirp {kvm_opt} "
-            f"qemuparams=\"-m 4096\"'"
+            f"bash -c 'cd {self.vdkr_dir} && "
+            f"VXN_ARCH={self.arch} VXN_MEM=4096 ./boot-xen.sh'"
         )
 
-        print(f"Starting runqemu (Xen): {cmd}")
+        print(f"Booting SDK dom0 (boot-xen.sh): {cmd}")
         self.child = pexpect.spawn(cmd, encoding='utf-8', timeout=self.timeout)
 
         # Log output for debugging
-        self.child.logfile_read = open('/tmp/runqemu-xen-test.log', 'w')
+        self.child.logfile_read = open('/tmp/boot-xen-test.log', 'w')
 
         # Wait for login prompt
         try:
@@ -234,61 +235,48 @@ def machine(request):
 
 
 @pytest.fixture(scope="module")
-def xen_image(build_dir):
-    """Build xen-image-minimal with required distro features + docker engine.
+def xen_dom0(vdkr_dir, request):
+    """The vxn dom0 shipped in the standalone SDK (vxn-blobs/<arch>/*.wic +
+    boot-xen.sh).
 
-    Self-contained: the fixture installs the container engine + runtime config
-    itself (docker-moby + vxn-docker-config: daemon.json wiring vxn-oci-runtime
-    as Docker's default runtime, iptables=false), so TestXenDockerBackend
-    actually exercises the docker+vxn path instead of silently skipping when
-    docker happens not to be in the ambient image. Previously this relied on a
-    developer's local.conf pulling docker/podman in, which is not reproducible.
+    The vxn tests boot the dom0 from the SDK -- built reproducibly by
+    tests/build-vcontainer-sdk.sh -- rather than rebuilding xen-image-minimal in
+    the dev build. That keeps them independent of the dev local.conf (which may
+    carry podman-in-dom0 lines that collide with docker-moby at do_rootfs). The
+    SDK dom0 carries vxn + containerd + docker-moby + vxn-docker-config, so it
+    covers the vxn-standalone, vctr, and docker->vxn paths. To (re)build it:
 
-    NB: assumes a clean local.conf -- do NOT also force podman in via
-    `IMAGE_INSTALL:append:pn-xen-image-minimal += "... vxn-podman-config"`,
-    since podman-docker and docker-moby both provide /usr/bin/docker and will
-    conflict at do_rootfs.
+        tests/build-vcontainer-sdk.sh
     """
-    result = _run_bitbake(
-        build_dir, "xen-image-minimal",
-        extra_vars={
-            "DISTRO_FEATURES:append": " xen vxn",
-            "IMAGE_INSTALL:append:pn-xen-image-minimal":
-                " docker-moby vxn-docker-config",
-        },
-    )
-    if result.returncode != 0:
-        pytest.fail(f"Xen image build failed: {result.stderr}")
+    arch = request.config.getoption("--arch")
+    wics = list((vdkr_dir / "vxn-blobs" / arch).glob("*.wic"))
+    if not (vdkr_dir / "boot-xen.sh").exists() or not wics:
+        pytest.skip(
+            f"no vxn dom0 in the SDK at {vdkr_dir} (vxn-blobs/{arch}/*.wic + "
+            f"boot-xen.sh); build it with tests/build-vcontainer-sdk.sh")
+    return vdkr_dir
 
 
 @pytest.fixture(scope="module")
-def xen_session(request, poky_dir, build_dir, machine, xen_image):
-    """
-    Module-scoped fixture that builds xen-image-minimal and boots it
-    once for all tests.
+def xen_session(request, xen_dom0):
+    """Boot the SDK's vxn dom0 once for all tests (module-scoped).
 
-    Skips if pexpect is not available or boot fails.
+    Skips if pexpect is not available or the dom0 fails to boot.
     """
     if not PEXPECT_AVAILABLE:
         pytest.skip("pexpect not installed. Run: pip install pexpect")
 
-    # Check that the .wic image exists
-    deploy_dir = build_dir / "tmp" / "deploy" / "images" / machine
-    wic_files = list(deploy_dir.glob("xen-image-minimal-*.rootfs.wic"))
-    if not wic_files:
-        pytest.skip(f"xen-image-minimal .wic image not found in {deploy_dir}")
-
+    arch = request.config.getoption("--arch")
     timeout = request.config.getoption("--boot-timeout")
     use_kvm = not request.config.getoption("--no-kvm")
 
-    runner = XenRunner(poky_dir, build_dir, machine,
-                       use_kvm=use_kvm, timeout=timeout)
+    runner = XenRunner(xen_dom0, arch=arch, use_kvm=use_kvm, timeout=timeout)
 
     try:
         runner.start()
         yield runner
     except RuntimeError as e:
-        pytest.skip(f"Failed to boot Xen image: {e}")
+        pytest.skip(f"Failed to boot SDK dom0: {e}")
     finally:
         runner.stop()
 
@@ -785,7 +773,7 @@ class TestXenVxnImageCache:
 def _docker_available(xen_session):
     """Check Docker is installed and running, skip if not.
 
-    With the self-contained xen_image fixture docker-moby is installed, so a
+    The SDK dom0 (vxn-x86-64.conf) ships docker-moby + vxn-docker-config, so a
     'not installed' skip now signals a real problem (engine config missing). If
     the service merely has not started yet, start it before skipping.
     """
