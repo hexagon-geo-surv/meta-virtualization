@@ -103,6 +103,11 @@ cp "$DEV_BUILD/conf/bblayers.conf" conf/bblayers.conf
     echo 'MACHINE ?= "qemux86-64"'
     echo 'CONF_VERSION = "2"'
     echo ''
+    echo '# systemd init manager -> pulls the usrmerge DISTRO_FEATURE, which modern'
+    echo '# systemd REQUIRES; podman/crun/conmon in the vpdmn rootfs depend on systemd.'
+    echo '# (meta-virt-host.conf adds the systemd feature but not usrmerge/INIT_MANAGER.)'
+    echo 'INIT_MANAGER = "systemd"'
+    echo ''
     echo '# --- inherited from the dev build local.conf (caches/mirrors/hashserv/perf) ---'
     grep -E '^[[:space:]]*(DL_DIR|SSTATE_DIR|SSTATE_MIRRORS|SOURCE_MIRROR_URL|PREMIRRORS|BB_HASHSERVE|BB_HASHSERVE_UPSTREAM|BB_SIGNATURE_HANDLER|BB_NUMBER_THREADS|PARALLEL_MAKE)[[:space:]]*[?:+.]?=' \
         "$DEV_BUILD/conf/local.conf" || true
