@@ -47,6 +47,27 @@ pytest tests/test_vdkr.py tests/test_vpdmn.py -v --vdkr-dir /tmp/vcontainer
 
 The manual build steps below still work if you prefer to drive it yourself.
 
+### dom0 engine flavors (docker / podman)
+
+docker-moby and podman both own `/usr/bin/docker`, so they cannot share one
+rootfs -- each engine is a separate dom0 image. The helper's SDK profile ships
+**both** blobs (`vxn-blobs/<arch>/xen-dom0-docker.wic` and `xen-dom0-podman.wic`),
+and `boot-xen.sh` picks one at launch (one dom0 is active per boot; relaunch to
+switch):
+
+```bash
+./boot-xen.sh                    # docker dom0 (default)
+./boot-xen.sh --flavor podman    # podman dom0
+# env equivalents: VXN_DOM0_FLAVOR=podman, VXN_SNAPSHOT=1 (clean throwaway boot)
+```
+
+The xen test suite boots the docker dom0 for most tests and the podman dom0 for
+`TestXenPodmanBackend`; a docker-only SDK skips the podman tests cleanly. All
+fixtures boot with `snapshot=on`, so a crashed or mutated run can't poison the
+blob for the next run. To build a docker-only test SDK, drop the
+`vcontainer-sdk-vxn-podman-x86-64.conf` require from `build-vcontainer-sdk.sh`
+(or set `VXN_DOM0_FLAVORS = "docker"`).
+
 ## vdkr Tests
 
 ### Prerequisites

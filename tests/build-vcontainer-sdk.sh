@@ -108,6 +108,11 @@ cp "$DEV_BUILD/conf/bblayers.conf" conf/bblayers.conf
     echo '# (meta-virt-host.conf adds the systemd feature but not usrmerge/INIT_MANAGER.)'
     echo 'INIT_MANAGER = "systemd"'
     echo ''
+    echo '# Passwordless root so the console-login test can reach a shell (matches a'
+    echo '# typical dev local.conf). The vxn dom0 is a throwaway appliance -- the DomU'
+    echo '# is the isolation boundary -- and SSH into dom0 is ed25519-key based anyway.'
+    echo 'EXTRA_IMAGE_FEATURES ?= "allow-empty-password empty-root-password allow-root-login"'
+    echo ''
     echo '# --- inherited from the dev build local.conf (caches/mirrors/hashserv/perf) ---'
     grep -E '^[[:space:]]*(DL_DIR|SSTATE_DIR|SSTATE_MIRRORS|SOURCE_MIRROR_URL|PREMIRRORS|BB_HASHSERVE|BB_HASHSERVE_UPSTREAM|BB_SIGNATURE_HANDLER|BB_NUMBER_THREADS|PARALLEL_MAKE)[[:space:]]*[?:+.]?=' \
         "$DEV_BUILD/conf/local.conf" || true
@@ -118,6 +123,9 @@ cp "$DEV_BUILD/conf/bblayers.conf" conf/bblayers.conf
     echo 'require conf/distro/include/vcontainer-sdk-vdkr-x86-64.conf'
     echo 'require conf/distro/include/vcontainer-sdk-vpdmn-x86-64.conf'
     echo 'require conf/distro/include/vcontainer-sdk-vxn-x86-64.conf'
+    echo '# second dom0 blob (podman flavor) so the podman-backend xen tests run;'
+    echo '# ships xen-dom0-docker.wic + xen-dom0-podman.wic, boot-xen.sh --flavor selects'
+    echo 'require conf/distro/include/vcontainer-sdk-vxn-podman-x86-64.conf'
     echo 'require conf/distro/include/vcontainer-sdk-aarch64.conf'
 } > conf/local.conf
 
