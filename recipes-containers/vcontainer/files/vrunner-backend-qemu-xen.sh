@@ -58,13 +58,21 @@ hv_setup_arch() {
             ;;
     esac
 
-    # Locate the Xen dom0 wic blob.  VXN_IMAGE overrides; otherwise prefer the
-    # canonical name the SDK tarball installs, then any *.wic in the arch dir.
+    # Locate the Xen dom0 wic blob.  VXN_IMAGE overrides; otherwise pick the
+    # requested engine flavor (VXN_DOM0_FLAVOR, default docker), then the docker
+    # blob, then the legacy single-blob name, then any *.wic. Deterministic so a
+    # multi-flavor SDK (xen-dom0-docker.wic + xen-dom0-podman.wic) never boots a
+    # random flavor via glob head -1.
+    WIC_FLAVOR="${VXN_DOM0_FLAVOR:-docker}"
     WIC_IMAGE="${VXN_IMAGE:-}"
     if [ -z "$WIC_IMAGE" ]; then
-        if [ -f "$BLOB_DIR/$TARGET_ARCH/xen-dom0.wic" ]; then
-            WIC_IMAGE="$BLOB_DIR/$TARGET_ARCH/xen-dom0.wic"
-        else
+        for cand in \
+            "$BLOB_DIR/$TARGET_ARCH/xen-dom0-${WIC_FLAVOR}.wic" \
+            "$BLOB_DIR/$TARGET_ARCH/xen-dom0-docker.wic" \
+            "$BLOB_DIR/$TARGET_ARCH/xen-dom0.wic"; do
+            if [ -f "$cand" ]; then WIC_IMAGE="$cand"; break; fi
+        done
+        if [ -z "$WIC_IMAGE" ]; then
             WIC_IMAGE="$(ls -1 "$BLOB_DIR/$TARGET_ARCH"/*.wic 2>/dev/null | head -1 || true)"
         fi
     fi
